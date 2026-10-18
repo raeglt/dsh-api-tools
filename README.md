@@ -126,6 +126,7 @@
 - **参数校验**：DSH 按 JSON Schema 校验；缺必填/多传字段直接判定失败，不会发出请求。
 - **安全**：只允许访问 spec 里出现的 host；路径参数强制 `encodeURIComponent`；不提供"任意 URL"工具。
 - **写操作**：非幂等方法默认 `dangerous`（同工具串行执行），并默认 `confirm`（调用前走 DSH 审批）。详见「写操作确认」。
+- **返回值必须是无损 JSON**：DSH 会对工具结果做 `JSON.stringify → JSON.parse` 的快照，任何 `undefined`、`NaN`、`Infinity`、`-0`、`Date`、循环引用都会让整次调用报 `invalid output: value is not lossless JSON`。所有返回值都统一过 `lib/json.js` 的 `jsonSafe()` 清洗。
 
 ## 排错
 
@@ -134,6 +135,7 @@
 | 工具没出现 | 调 `api_tools_status` 看 `status`/`error`；确认 spec 路径 |
 | 改了 spec 但不生效 | 看 mtime 是否被改（某些编辑器保存到临时文件再替换会触发）；直接重开一轮对话 |
 | `环境变量 XXX 未设置` | 在启动 web 的终端里设置后重启 web |
+| `returned invalid output: value is not lossless JSON` | 工具返回值里混进了 `undefined`/`NaN`/`Date`/循环引用；改为返回前过 `jsonSafe()`（内置工具已处理，只影响自写工具） |
 | 大量工具挤占上下文 | 拆成多个 spec 文件/多个 `server` 前缀，或用 `enabled:false` 关掉不用的 |
 
 状态工具返回的 `problems` 字段会列出被跳过的坏条目（单条 spec 写错不会拖垮整份配置；但整份解析失败时会保留上一版可用工具）。
@@ -144,13 +146,16 @@
 cd D:\AI\dsh\dsh-api-tools
 node test/run.mjs                 # 直接打真实接口，验证 spec 与调用链
 node test/apply-smoke.mjs         # 用假 ctx 跑 apply()，验证注册与清理
+node test/lossless.mjs            # 工具返回值必须是无损 JSON（undefined/NaN/Date/循环引用）
+node test/web-api.mjs             # 用假 webServer 跑一遍配置界面的 HTTP 接口
+node test/client-smoke.mjs        # SSR 渲染客户端 bundle，验证设置页能挂载
 cd D:\AI\dsh\deepseek-harness
 node --import tsx/esm D:\AI\dsh\dsh-api-tools\test\validate-schemas.mjs   # 用 DSH 真实校验器检查 schema
 ```
 
 ## 依赖的 DSH 契约
 
-插件**不依赖任何 `@deepseek-ai/*` npm 包**（`dependencies` 只有 `yaml`），但运行时依赖下面这些 DSH 内部约定。它们不是公开稳定 API，DSH 大版本升级后可能变化——升级完跑一遍「开发」里的三个测试即可确认。
+插件**不依赖任何 `@deepseek-ai/*` npm 包**（`dependencies` 只有 `yaml`），但运行时依赖下面这些 DSH 内部约定。它们不是公开稳定 API，DSH 大版本升级后可能变化——升级完把「开发」里的 6 个测试跑一遍即可确认。
 
 | 契约 | 用在哪 | 验证于 |
 |---|---|---|
