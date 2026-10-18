@@ -2,7 +2,7 @@
  * Web 配置界面用例：直接跑插件注册的 HTTP 处理器（不启动 DSH、不调模型）。
  * 覆盖网关列表/详情、新建网关、保存接口、坏配置拒绝写入、删除网关、在线测试。
  */
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
@@ -59,21 +59,36 @@ const fakeRes = () => {
   return out
 }
 
-const call = async (method, route, body) => {
+const callOn = async (target, method, route, body, headers = {}) => {
   const payload = body === undefined ? '' : JSON.stringify(body)
   const req = {
     method,
     url: `/api-tools/v1${route}`,
+    headers: { host: '127.0.0.1:3080', ...headers },
     async *[Symbol.asyncIterator]() {
       if (payload !== '') yield Buffer.from(payload)
     },
   }
   const res = fakeRes()
-  await handler(req, res)
+  await target(req, res)
   return { status: res.status, json: JSON.parse(res.body) }
 }
+const call = (method, route, body, headers) => callOn(handler, method, route, body, headers)
 
 assert.ok(handler, '插件应注册 webServer 前缀路由')
+
+// 0. 来源栅栏（connection 服务不在时的内置校验）：只放行本机同源
+const noHost = await call('GET', '/gateways', undefined, { host: '' })
+assert.equal(noHost.status, 403, '缺 Host 头要拒绝')
+const crossSite = await call('GET', '/gateways', undefined, { 'sec-fetch-site': 'cross-site' })
+assert.equal(crossSite.status, 403, '跨站请求要拒绝')
+const badOrigin = await call('GET', '/gateways', undefined, { origin: 'http://evil.example.com' })
+assert.equal(badOrigin.status, 403, 'Origin 不同源要拒绝')
+const nullOrigin = await call('GET', '/gateways', undefined, { origin: 'null' })
+assert.equal(nullOrigin.status, 403, 'Origin: null 要拒绝')
+const sameOrigin = await call('GET', '/gateways', undefined, { origin: 'http://127.0.0.1:3080' })
+assert.equal(sameOrigin.status, 200, '本机同源要放行')
+console.log('来源栅栏 → 缺 Host/跨站/异源/null 均 403，同源 200')
 
 // 1. 网关列表：目录里只有一个 apis.json
 const list1 = await call('GET', '/gateways')
@@ -106,6 +121,11 @@ assert.ok(registered.has('demo_demo_new'), '新增接口应注册成工具')
 const newTool = registered.get('demo_demo_new')
 assert.equal(newTool.parameters.properties.id.type, 'string', '路径占位符应自动生成参数')
 console.log(`PUT /gateway → 文件 3 条，工具 ${[...registered.keys()].length} 个（含 demo_demo_new）`)
+if (process.platform !== 'win32') {
+  const mode = statSync(specFile).mode & 0o777
+  assert.equal(mode, 0o600, '网关文件可能含密钥，权限应为 0600')
+  console.log(`文件权限 → ${mode.toString(8)}`)
+}
 
 // 4. 坏配置：拒绝并保持文件不变
 const broken = structuredClone(nextSpec)
@@ -165,6 +185,37 @@ assert.equal(badArgs.json.result.error, 'invalid_arguments')
 assert.match(badArgs.json.result.message, /longitude/)
 console.log(`POST /test（缺参）→ ${badArgs.json.result.error}「${badArgs.json.result.message}」`)
 
+// 9b. 明文密钥不进界面回显；回传占位符不覆盖真实值
+const erpWithSecret = { ...erpSpec, auth: { type: 'header', header: 'X-API-Key', value: 'sk-real-secret' } }
+const savedSecret = await call('PUT', '/gateway', { file: erpFile, spec: erpWithSecret })
+assert.equal(savedSecret.status, 200, JSON.stringify(savedSecret.json))
+assert.equal(savedSecret.json.spec.auth.value, '***', '回显不能带明文密钥')
+assert.equal(savedSecret.json.auth.valueSet, true, '但要告诉界面密钥已配置')
+const roundTrip = await call('PUT', '/gateway', { file: erpFile, spec: savedSecret.json.spec })
+assert.equal(roundTrip.status, 200, JSON.stringify(roundTrip.json))
+assert.equal(JSON.parse(readFileSync(erpFile, 'utf8')).auth.value, 'sk-real-secret', '回传 *** 应合并回磁盘原值')
+console.log('回显脱敏 → auth.value 显示 ***，回传后磁盘仍是原值')
+
+// 9c. /test 不许客户端指定 baseUrl/auth，也不许绝对 URL
+const ssrf = await call('POST', '/test', {
+  file: specFile,
+  tool: {
+    name: 'probe',
+    method: 'GET',
+    path: '/v1/forecast',
+    baseUrl: 'https://evil.example.com',
+    auth: { type: 'header', header: 'X-API-Key', value: 'sk-leak' },
+    params: { latitude: { type: 'number', required: true }, longitude: { type: 'number', required: true } },
+  },
+  args: { latitude: 30 },
+})
+assert.equal(ssrf.status, 200, JSON.stringify(ssrf.json))
+assert.equal(ssrf.json.result.error, 'invalid_arguments', '客户端 baseUrl/auth 必须被丢弃，否则就是带着网关密钥的 SSRF')
+const absolute = await call('POST', '/test', { file: specFile, tool: { name: 'probe', method: 'GET', path: 'https://evil.example.com/steal' }, args: {} })
+assert.equal(absolute.status, 400)
+assert.match(absolute.json.error, /绝对 URL/)
+console.log('POST /test（客户端 baseUrl / 绝对 path）→ 覆盖参数被丢弃、绝对 URL 400')
+
 // 10. 坏定义 / 缺 tool
 const badTool = await call('POST', '/test', { tool: { name: 'nopath' }, args: {} })
 assert.equal(badTool.status, 400)
@@ -208,5 +259,30 @@ assert.equal(passed.kind, 'allow')
 const unknown = await gate({ name: 'not_ours' }, async () => ({ kind: 'allow' }))
 assert.equal(unknown.kind, 'allow', '别的工具不受影响')
 console.log(`pre-execute → demo_demo_echo 要确认，demo_demo_forecast 直接放行`)
+
+// 15. 宿主 connection 可用时原样透传它的 401（不绕过认证）
+const dir2 = mkdtempSync(path.join(tmpdir(), 'gateway-conn-'))
+const specFile2 = path.join(dir2, 'apis.json')
+writeFileSync(specFile2, JSON.stringify({ server: 'conn', baseUrl: 'https://conn.example.com', tools: [] }))
+let handler2
+const ctx2 = {
+  tools: { register: () => () => {}, get: () => undefined },
+  on: () => () => {},
+  inject(names, callback) {
+    if (!names.includes('webServer')) return () => {}
+    callback({
+      webServer: { register(route) { handler2 = route.handler; return () => {} } },
+      get: (serviceName) => (serviceName === 'connection' ? { requestRejection: () => 401 } : undefined),
+    })
+    return () => {}
+  },
+}
+plugin.apply(ctx2, { specFile: specFile2, watch: false })
+await new Promise((resolve) => setTimeout(resolve, 300))
+assert.ok(handler2, '第二实例应注册路由')
+const unauthenticated = await callOn(handler2, 'GET', '/gateways')
+assert.equal(unauthenticated.status, 401, 'connection 判定未认证时要原样返回 401')
+assert.equal(unauthenticated.json.ok, false)
+console.log('connection 可用 → 未认证请求 401 透传')
 
 console.log('\n全部通过')

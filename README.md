@@ -124,9 +124,19 @@
 - **工具数量**：超过 20 个自动加 `deferLoading`，定义按需加载，不占常驻上下文。
 - **响应**：`{ ok, status, method, url, durationMs, data | text, truncated? }`；4xx/5xx 不抛异常，返回 `ok:false` 让模型自己判断；URL 里的 `apikey/token/secret/...` 会被打码。
 - **参数校验**：DSH 按 JSON Schema 校验；缺必填/多传字段直接判定失败，不会发出请求。
-- **安全**：只允许访问 spec 里出现的 host；路径参数强制 `encodeURIComponent`；不提供"任意 URL"工具。
+- **安全**：只允许访问 spec 里出现的 host；路径参数强制 `encodeURIComponent`；不提供"任意 URL"工具。配置界面本身的安全边界见下一节。
 - **写操作**：非幂等方法默认 `dangerous`（同工具串行执行），并默认 `confirm`（调用前走 DSH 审批）。详见「写操作确认」。
 - **返回值必须是无损 JSON**：DSH 会对工具结果做 `JSON.stringify → JSON.parse` 的快照，任何 `undefined`、`NaN`、`Infinity`、`-0`、`Date`、循环引用都会让整次调用报 `invalid output: value is not lossless JSON`。所有返回值都统一过 `lib/json.js` 的 `jsonSafe()` 清洗。
+
+## 配置界面的安全边界
+
+`/api-tools/v1` 是**写配置**的接口（能改 baseUrl 和鉴权，等价于改这台机器发出去的请求），所以默认只对本机同源开放：
+
+- **来源栅栏**：优先复用宿主 `connection` 服务的 `requestRejection()`——Host 必须回环（防 DNS rebinding）、拒绝 `sec-fetch-site: cross-site`、Origin 必须与 Host 同 authority（`null` 拒绝），并校验浏览器会话；拿不到该服务（旧版本 / 桌面 profile）时退回内置的 Host/Origin 自查，此时只挡跨站、不做认证。
+- **实际效果**：DSH Web 界面里正常使用；`curl` 直接打会得到 `401 unauthorized`（connection 服务可用时）。用 `--host 0.0.0.0` 暴露到局域网时，只有 `trustedHosts` 白名单里的 authority 能进。
+- **在线测试**：`POST /test` 只允许用网关文件里的 `baseUrl` 和鉴权，请求体里的 `baseUrl/auth/headers/followRedirects` 一律丢弃，`path` 不允许绝对 URL——否则这里就成了「带着网关密钥打任意地址」的 SSRF 出口。
+- **密钥不回显**：`auth.value` 和敏感 header 在界面上以 `***` 显示；保存时 `***` 视为「未修改」，会合并回磁盘上的原值，不会把配置覆盖成星号。
+- **文件权限**：网关文件按 `0600` 写入、目录按 `0700` 创建（POSIX；Windows 上由 ACL 决定）。
 
 ## 排错
 
