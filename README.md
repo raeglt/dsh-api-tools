@@ -1,14 +1,16 @@
-# dsh-api-gateway
+# dsh-api-tools
 
 把一组 RESTful 接口转成 DSH 工具集：**一个网关文件（JSON/YAML）描述一组接口，每个接口自动注册成一个工具**，模型直接调用，不需要写 MCP server、也不经过协议层。
 
-已安装进 `web` profile（`link:D:/AI/dsh/dsh-api-gateway`），网关目录默认是 `C:\Users\Administrator\.dsh\api-gateway`——**目录里一个 `.json` 就是一个网关**，可以同时装很多个（各自的 baseUrl / 鉴权 / 接口列表），工具名靠各自的 `server` 前缀区分。
+已安装进 `web` profile（`link:D:/AI/dsh/dsh-api-tools`），网关目录默认是 `C:\Users\Administrator\.dsh\api-tools`——**目录里一个 `.json` 就是一个网关**，可以同时装很多个（各自的 baseUrl / 鉴权 / 接口列表），工具名靠各自的 `server` 前缀区分。
+
+> 旧版叫 `dsh-api-gateway`、目录是 `~/.dsh/api-gateway`。改名后首次加载会自动把旧目录搬到 `~/.dsh/api-tools`（新目录已存在则不动），配置不用手改。
 
 ## 快速上手
 
 1. 打开 Web 界面：**设置（Settings）→ 接口网关**，列表页能新建 / 删除网关，点「编辑」进去增删改接口，点「保存接口」即写入磁盘并热重载。
 2. 插件监听网关目录和每个网关文件的 mtime，改动后**自动热重载**，下一轮对话即可看到新工具。
-3. 不确定加载状态时，让模型调 `api_gateway_status`，或看 web 进程日志里的 `[api-gateway]` 行。
+3. 不确定加载状态时，让模型调 `api_tools_status`，或看 web 进程日志里的 `[api-tools]` 行。
 
 ## Web 配置界面
 
@@ -34,15 +36,15 @@
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| GET | `/api-gateway/v1/gateways` | 网关列表 + 每个网关注册了哪些工具 |
-| GET | `/api-gateway/v1/gateway?file=…` | 单个网关的 spec + 每条接口的校验结果 |
-| POST | `/api-gateway/v1/gateways` | 新建网关：body `{ server, baseUrl, auth? }`，生成 `<server>.json`；重名返回 409 |
-| PUT | `/api-gateway/v1/gateway` | 保存网关：body `{ file, spec }`（先校验，有问题的配置拒绝写入并返回 400） |
-| DELETE | `/api-gateway/v1/gateway?file=…` | 删除网关文件（只允许网关目录内的路径） |
-| POST | `/api-gateway/v1/reload` | 重新加载并注册全部工具 |
-| POST | `/api-gateway/v1/test` | 在线测试：body `{ file?, tool, args }`，用该网关的 baseUrl/鉴权直连，返回 `{ ok, tool, args, result }` |
+| GET | `/api-tools/v1/gateways` | 网关列表 + 每个网关注册了哪些工具 |
+| GET | `/api-tools/v1/gateway?file=…` | 单个网关的 spec + 每条接口的校验结果 |
+| POST | `/api-tools/v1/gateways` | 新建网关：body `{ server, baseUrl, auth? }`，生成 `<server>.json`；重名返回 409 |
+| PUT | `/api-tools/v1/gateway` | 保存网关：body `{ file, spec }`（先校验，有问题的配置拒绝写入并返回 400） |
+| DELETE | `/api-tools/v1/gateway?file=…` | 删除网关文件（只允许网关目录内的路径） |
+| POST | `/api-tools/v1/reload` | 重新加载并注册全部工具 |
+| POST | `/api-tools/v1/test` | 在线测试：body `{ file?, tool, args }`，用该网关的 baseUrl/鉴权直连，返回 `{ ok, tool, args, result }` |
 
-保存是**原子写**（临时文件 + rename），坏配置不会覆盖掉正在用的好配置；任何改动都写回对应网关文件，所以界面和手改 JSON 可以混用。旧路径 `GET/PUT /api-gateway/v1/spec` 仍可用（等价于操作默认的 `apis.json`）。
+保存是**原子写**（临时文件 + rename），坏配置不会覆盖掉正在用的好配置；任何改动都写回对应网关文件，所以界面和手改 JSON 可以混用。旧路径 `GET/PUT /api-tools/v1/spec` 仍可用（等价于操作默认的 `apis.json`）。
 
 ## spec 结构
 
@@ -54,7 +56,7 @@
   "defaults": {
     "timeoutMs": 30000,
     "maxResponseChars": 8000,            // 响应截断长度，防止灌爆上下文
-    "headers": { "User-Agent": "dsh-api-gateway/0.1" }
+    "headers": { "User-Agent": "dsh-api-tools/0.1" }
   },
   "tools": [ /* 见下 */ ]
 }
@@ -86,8 +88,19 @@
 | `params` | 对象或数组；见下 |
 | `enabled` | `false` 时不注册（模板占位用） |
 | `dangerous` | 默认非 GET 为 `true`；描述里会加"写操作"警告 |
+| `confirm` | 默认等于 `dangerous`；为 `true` 时**每次调用都走 DSH 审批**：用户没批准就不发请求（见下节） |
 | `timeoutMs` / `maxResponseChars` | 覆盖默认值 |
 | `headers` | 该工具额外的请求头 |
+
+### 写操作确认
+
+`confirm: true` 的工具在真正发请求前会触发 DSH 原生审批（插件在 `tools/pre-execute` 里返回 `{ kind: 'ask', ... }`）：
+
+- 宿主有审批通道（桌面/Web 的审批弹窗）→ 模型每次调用都会问用户，用户点"允许"才执行，拒绝则本次调用失败。
+- 审批策略是 `never`、或没有可用审批者 → **直接拒绝**，模型会收到"the user rejected tool ..."这类结果。这是 DSH 的既定行为，不是插件 bug。
+- 想让自动化流水线不被打断：给那个工具写 `"confirm": false`（保持 `dangerous: true` 仍然会串行执行、描述里也有警告）。
+
+界面上对应「写操作（会修改远端数据）」和「调用前要人工确认」两个勾选框；取消前者会自动把后者也取消。
 
 ### 参数
 
@@ -112,12 +125,13 @@
 - **响应**：`{ ok, status, method, url, durationMs, data | text, truncated? }`；4xx/5xx 不抛异常，返回 `ok:false` 让模型自己判断；URL 里的 `apikey/token/secret/...` 会被打码。
 - **参数校验**：DSH 按 JSON Schema 校验；缺必填/多传字段直接判定失败，不会发出请求。
 - **安全**：只允许访问 spec 里出现的 host；路径参数强制 `encodeURIComponent`；不提供"任意 URL"工具。
+- **写操作**：非幂等方法默认 `dangerous`（同工具串行执行），并默认 `confirm`（调用前走 DSH 审批）。详见「写操作确认」。
 
 ## 排错
 
 | 现象 | 排查 |
 |---|---|
-| 工具没出现 | 调 `api_gateway_status` 看 `status`/`error`；确认 spec 路径 |
+| 工具没出现 | 调 `api_tools_status` 看 `status`/`error`；确认 spec 路径 |
 | 改了 spec 但不生效 | 看 mtime 是否被改（某些编辑器保存到临时文件再替换会触发）；直接重开一轮对话 |
 | `环境变量 XXX 未设置` | 在启动 web 的终端里设置后重启 web |
 | 大量工具挤占上下文 | 拆成多个 spec 文件/多个 `server` 前缀，或用 `enabled:false` 关掉不用的 |
@@ -127,11 +141,11 @@
 ## 开发
 
 ```powershell
-cd D:\AI\dsh\dsh-api-gateway
+cd D:\AI\dsh\dsh-api-tools
 node test/run.mjs                 # 直接打真实接口，验证 spec 与调用链
 node test/apply-smoke.mjs         # 用假 ctx 跑 apply()，验证注册与清理
 cd D:\AI\dsh\deepseek-harness
-node --import tsx/esm D:\AI\dsh\dsh-api-gateway\test\validate-schemas.mjs   # 用 DSH 真实校验器检查 schema
+node --import tsx/esm D:\AI\dsh\dsh-api-tools\test\validate-schemas.mjs   # 用 DSH 真实校验器检查 schema
 ```
 
 ## 依赖的 DSH 契约
@@ -147,11 +161,12 @@ node --import tsx/esm D:\AI\dsh\dsh-api-gateway\test\validate-schemas.mjs   # �
 | 客户端 bundle：`window.__ModuleLoader__.load({ id, factory })`，CJS 包装，外部模块只能 `require('react')` 等白名单（`packages/client/web/src/platform.ts` 的 `PLATFORM_MODULES`） | `lib/client.js` | 同上 |
 | `package.json` 的 `dsh.bundle.patch`、`exports["./client"]`、`dsh.client = { platform:'web', inject:[...] }` | `package.json` | 同上 |
 | slot `settings.section`，`register({ name:'settings.section', id, order, label }, Component)`；组件要直接传，不能包一层 | `lib/client.js` | 同上 |
+| `ctx.on('tools/pre-execute', (exec, next) => ...)` 返回 `{ kind:'ask', reason, displayReason:{ en, zh } }` 触发原生审批；`exec.name` 是被调工具名 | `lib/index.js` | 同上 |
 | profile 插件装载：`dsh plugin --profile web add <dir>` 写 `dsh.profile.bundles` + `dependencies`（`link:`），重启生效 | 安装 | 同上 |
 
 失效时的典型表现：
 
-- `[api-gateway]` 日志出现 `did not activate` / `cannot get property ... without inject` → 宿主 API 变了，工具全部不注册。
+- `[api-tools]` 日志出现 `did not activate` / `cannot get property ... without inject` → 宿主 API 变了，工具全部不注册。
 - 设置页没有「接口网关」入口、浏览器控制台报 `__ModuleLoader__` 相关错误 → 客户端 bundle 或 slot 变了（工具通常仍在）。
 - `pnpm dsh plugin list` 里看不到插件 → profile 被改，重装即可。
 
@@ -159,5 +174,5 @@ node --import tsx/esm D:\AI\dsh\dsh-api-gateway\test\validate-schemas.mjs   # �
 
 ```powershell
 cd D:\AI\dsh\deepseek-harness
-pnpm dsh plugin --profile web remove dsh-api-gateway
+pnpm dsh plugin --profile web remove dsh-api-tools
 ```

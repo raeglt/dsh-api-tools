@@ -5,7 +5,7 @@
   "defaults": {
     "timeoutMs": 20000,
     "maxResponseChars": 12000,
-    "headers": { "User-Agent": "dsh-api-gateway/0.1" }
+    "headers": { "User-Agent": "dsh-api-tools/0.1" }
   },
   "tools": [
     {
@@ -54,11 +54,12 @@
     {
       "name": "create_refund",
       "enabled": false,
-      "description": "示例：写操作（POST + JSON body）。默认禁用；启用后请把 dangerous 保持为 true。",
+      "description": "示例：写操作（POST + JSON body）。默认禁用；启用后保持 dangerous: true，confirm 缺省即为 true（每次调用先弹审批）。",
       "method": "POST",
       "baseUrl": "https://your-erp.example.com/api",
       "path": "/orders/{orderId}/refunds",
       "dangerous": true,
+      "confirm": true,
       "params": {
         "orderId": { "in": "path", "type": "string", "required": true, "description": "订单号" },
         "amount": { "in": "body", "type": "number", "required": true, "description": "退款金额（元）" },

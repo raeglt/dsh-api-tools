@@ -16,7 +16,7 @@ let definition
 const sandbox = { window: { __ModuleLoader__: { load: (next) => { definition = next } } }, console }
 vm.runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), sandbox, { filename: 'client.js' })
 
-assert.equal(definition.id, 'dsh-api-gateway')
+assert.equal(definition.id, 'dsh-api-tools')
 const plugin = definition.factory((specifier) => requireFrom(specifier))
 assert.equal(JSON.stringify(plugin.inject), '["slots"]')
 assert.equal(typeof plugin.apply, 'function')
@@ -37,7 +37,7 @@ const ctx = {
 }
 plugin.apply(ctx)
 assert.ok(slot, '应注册 settings.section')
-assert.equal(slot.options.id, 'api-gateway')
+assert.equal(slot.options.id, 'api-tools')
 assert.equal(slot.options.label(), '接口网关')
 console.log(`注册分区：${slot.options.id} / ${slot.options.label()} / order=${slot.options.order}`)
 
@@ -53,12 +53,12 @@ console.log(`首屏渲染成功（${loading.length} 字节 HTML）`)
 const gatewayList = {
   ok: true,
   status: 'ok',
-  dir: 'C:/Users/Administrator/.dsh/api-gateway',
+  dir: 'C:/Users/Administrator/.dsh/api-tools',
   tools: ['demo_demo_forecast', 'erp_order_detail'],
   problems: ['demo：tools[1] 缺少 path'],
   gateways: [
-    { file: 'C:/Users/Administrator/.dsh/api-gateway/apis.json', name: 'apis.json', server: 'demo', baseUrl: 'https://api.open-meteo.com', tools: ['demo_demo_forecast'], empty: false, problems: [] },
-    { file: 'C:/Users/Administrator/.dsh/api-gateway/erp.json', name: 'erp.json', server: 'erp', baseUrl: 'https://erp.example.com', tools: [], empty: true, problems: [] },
+    { file: 'C:/Users/Administrator/.dsh/api-tools/apis.json', name: 'apis.json', server: 'demo', baseUrl: 'https://api.open-meteo.com', tools: ['demo_demo_forecast'], empty: false, problems: [] },
+    { file: 'C:/Users/Administrator/.dsh/api-tools/erp.json', name: 'erp.json', server: 'erp', baseUrl: 'https://erp.example.com', tools: [], empty: true, problems: [] },
   ],
 }
 const list = render({ initialGateways: gatewayList })
@@ -78,7 +78,7 @@ console.log(`新增网关表单渲染成功（${creating.length} 字节 HTML）`
 const state = {
   ok: true,
   status: 'ok',
-  file: 'C:/Users/Administrator/.dsh/api-gateway/apis.json',
+  file: 'C:/Users/Administrator/.dsh/api-tools/apis.json',
   registered: ['demo_demo_forecast'],
   problems: ['tools[1] (broken) 缺少 path'],
   entries: [

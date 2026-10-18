@@ -20,6 +20,7 @@ const baseSpec = {
 writeFileSync(specFile, JSON.stringify(baseSpec, null, 2))
 
 const registered = new Map()
+const events = new Map()
 const ctx = {
   tools: {
     register(definition) {
@@ -29,6 +30,10 @@ const ctx = {
     get(name) {
       return registered.get(name)
     },
+  },
+  on(event, listener) {
+    events.set(event, listener)
+    return () => events.delete(event)
   },
   inject(names, callback) {
     const scoped = { webServer: { register(route) { handler = route.handler; return () => {} } } }
@@ -58,7 +63,7 @@ const call = async (method, route, body) => {
   const payload = body === undefined ? '' : JSON.stringify(body)
   const req = {
     method,
-    url: `/api-gateway/v1${route}`,
+    url: `/api-tools/v1${route}`,
     async *[Symbol.asyncIterator]() {
       if (payload !== '') yield Buffer.from(payload)
     },
@@ -76,7 +81,8 @@ assert.equal(list1.status, 200)
 assert.equal(list1.json.gateways.length, 1)
 assert.equal(list1.json.gateways[0].server, 'demo')
 assert.deepEqual(list1.json.gateways[0].tools.sort(), ['demo_demo_echo', 'demo_demo_forecast'])
-assert.ok(registered.has('api_gateway_status'))
+assert.ok(registered.has('api_tools_status'))
+assert.deepEqual(list1.json.needsConfirm.sort(), ['demo_demo_echo'], 'POST 接口默认需要确认')
 console.log(`GET /gateways → ${list1.json.gateways.length} 个网关，${list1.json.tools.length} 个工具`)
 
 // 2. 网关详情
@@ -189,5 +195,18 @@ assert.equal(reloaded.json.ok, true)
 const missing = await call('GET', '/nope')
 assert.equal(missing.status, 404)
 console.log('POST /reload → ok；GET /nope → 404')
+
+// 14. 写操作确认：POST 接口返回 ask，GET 直接放行
+const gate = events.get('tools/pre-execute')
+assert.ok(gate, '应注册 tools/pre-execute 闸门')
+const asked = await gate({ name: 'demo_demo_echo' }, async () => ({ kind: 'allow' }))
+assert.equal(asked.kind, 'ask')
+assert.match(asked.displayReason.zh, /写操作/)
+assert.match(asked.displayReason.en, /write request/i)
+const passed = await gate({ name: 'demo_demo_forecast' }, async () => ({ kind: 'allow' }))
+assert.equal(passed.kind, 'allow')
+const unknown = await gate({ name: 'not_ours' }, async () => ({ kind: 'allow' }))
+assert.equal(unknown.kind, 'allow', '别的工具不受影响')
+console.log(`pre-execute → demo_demo_echo 要确认，demo_demo_forecast 直接放行`)
 
 console.log('\n全部通过')

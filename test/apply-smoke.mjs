@@ -4,6 +4,7 @@
  */
 const registered = []
 const disposers = []
+const events = new Map()
 const ctx = {
   tools: {
     register(definition) {
@@ -15,6 +16,10 @@ const ctx = {
       disposers.push(dispose)
       return dispose
     },
+  },
+  on(event, listener) {
+    events.set(event, listener)
+    return () => events.delete(event)
   },
   logger: {
     info: (message) => console.log('[info]', message),
@@ -30,7 +35,7 @@ await new Promise((resolve) => setTimeout(resolve, 300))
 console.log('\n注册的工具：')
 for (const definition of registered) console.log(` - ${definition.name}`)
 
-const status = registered.find((definition) => definition.name === 'api_gateway_status')
+const status = registered.find((definition) => definition.name === 'api_tools_status')
 console.log('\nstatus 工具输出：')
 console.log(JSON.stringify(await status.execute({}, {}), null, 1))
 
@@ -42,3 +47,11 @@ console.log(JSON.stringify(result.data?.daily ?? result).slice(0, 300))
 
 for (const dispose of disposers.reverse()) dispose()
 console.log(`\n清理后剩余工具：${registered.length}`)
+
+const gate = events.get('tools/pre-execute')
+if (!gate) {
+  console.log('\n写操作确认：未注册（ctx.on 不可用时会跳过）')
+} else {
+  const status = await gate({ name: 'api_tools_status' }, async () => ({ kind: 'allow' }))
+  console.log(`写操作确认：api_tools_status → ${status.kind}`)
+}

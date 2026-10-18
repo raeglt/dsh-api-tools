@@ -1,7 +1,7 @@
 /**
  * 用 DSH 真实注册表所用的 schema 校验器检查每个工具定义，
  * 避免"插件装上了但 register 抛 TypeError"的情况。
- * 运行：cd D:\AI\dsh\deepseek-harness; node --import tsx/esm D:\AI\dsh\dsh-api-gateway\test\validate-schemas.mjs
+ * 运行：cd D:\AI\dsh\deepseek-harness; node --import tsx/esm D:\AI\dsh\dsh-api-tools\test\validate-schemas.mjs
  */
 import { assertSupportedJsonSchema } from 'file:///D:/AI/dsh/deepseek-harness/packages/core/tools/src/json-schema.ts'
 import { loadSpec } from '../lib/spec.js'
