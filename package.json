@@ -1,0 +1,34 @@
+{
+  "name": "dsh-api-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "把一组 RESTful API 接口集合转成 DSH 工具集：一份 spec 声明接口，每个接口注册为一个工具。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "apis.example.json",
+    "README.md"
+  ],
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}

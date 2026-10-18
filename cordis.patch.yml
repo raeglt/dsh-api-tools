@@ -1,0 +1,10 @@
+# dsh-api-gateway：把接口集合（spec 文件）注册成 DSH 工具。
+# specFile 相对 $DSH_HOME，默认 <DSH_HOME>/api-gateway/apis.json；也可写绝对路径。
+- insert:
+    - id: api-gateway
+      name: dsh-api-gateway
+      config:
+        specFile: api-gateway/apis.json
+        timeoutMs: 30000
+        maxResponseChars: 8000
+        watch: true

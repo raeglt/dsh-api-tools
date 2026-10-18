@@ -1,0 +1,193 @@
+/**
+ * Web 配置界面用例：直接跑插件注册的 HTTP 处理器（不启动 DSH、不调模型）。
+ * 覆盖网关列表/详情、新建网关、保存接口、坏配置拒绝写入、删除网关、在线测试。
+ */
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import assert from 'node:assert/strict'
+
+const dir = mkdtempSync(path.join(tmpdir(), 'gateway-web-'))
+const specFile = path.join(dir, 'apis.json')
+const baseSpec = {
+  server: 'demo',
+  baseUrl: 'https://api.open-meteo.com',
+  tools: [
+    { name: 'demo_forecast', method: 'GET', path: '/v1/forecast', description: '天气', params: { latitude: { type: 'number', required: true }, longitude: { type: 'number', required: true } } },
+    { name: 'demo_echo', method: 'POST', path: '/v1/echo', description: '回显' },
+  ],
+}
+writeFileSync(specFile, JSON.stringify(baseSpec, null, 2))
+
+const registered = new Map()
+const ctx = {
+  tools: {
+    register(definition) {
+      registered.set(definition.name, definition)
+      return () => registered.delete(definition.name)
+    },
+    get(name) {
+      return registered.get(name)
+    },
+  },
+  inject(names, callback) {
+    const scoped = { webServer: { register(route) { handler = route.handler; return () => {} } } }
+    if (names.includes('webServer')) callback(scoped)
+    return () => {}
+  },
+}
+let handler
+
+const plugin = await import('../lib/index.js')
+plugin.apply(ctx, { specFile, watch: false })
+await new Promise((resolve) => setTimeout(resolve, 400))
+
+const fakeRes = () => {
+  const out = { status: 0, headers: {}, body: '' }
+  out.writeHead = (status, headers) => {
+    out.status = status
+    out.headers = headers ?? {}
+  }
+  out.end = (text) => {
+    out.body = text ?? ''
+  }
+  return out
+}
+
+const call = async (method, route, body) => {
+  const payload = body === undefined ? '' : JSON.stringify(body)
+  const req = {
+    method,
+    url: `/api-gateway/v1${route}`,
+    async *[Symbol.asyncIterator]() {
+      if (payload !== '') yield Buffer.from(payload)
+    },
+  }
+  const res = fakeRes()
+  await handler(req, res)
+  return { status: res.status, json: JSON.parse(res.body) }
+}
+
+assert.ok(handler, '插件应注册 webServer 前缀路由')
+
+// 1. 网关列表：目录里只有一个 apis.json
+const list1 = await call('GET', '/gateways')
+assert.equal(list1.status, 200)
+assert.equal(list1.json.gateways.length, 1)
+assert.equal(list1.json.gateways[0].server, 'demo')
+assert.deepEqual(list1.json.gateways[0].tools.sort(), ['demo_demo_echo', 'demo_demo_forecast'])
+assert.ok(registered.has('api_gateway_status'))
+console.log(`GET /gateways → ${list1.json.gateways.length} 个网关，${list1.json.tools.length} 个工具`)
+
+// 2. 网关详情
+const read1 = await call('GET', `/gateway?file=${encodeURIComponent(specFile)}`)
+assert.equal(read1.status, 200)
+assert.equal(read1.json.ok, true)
+assert.equal(read1.json.entries.length, 2)
+assert.equal(read1.json.server, 'demo')
+assert.deepEqual(read1.json.registered.sort(), ['demo_demo_echo', 'demo_demo_forecast'])
+console.log(`GET /gateway → ${read1.json.entries.length} 条接口`)
+
+// 3. 保存：新增一条接口 → 落盘 + 重新注册
+const nextSpec = structuredClone(baseSpec)
+nextSpec.tools.push({ name: 'demo_new', method: 'GET', path: '/v1/new/{id}' })
+const saved = await call('PUT', '/gateway', { file: specFile, spec: nextSpec })
+assert.equal(saved.status, 200, JSON.stringify(saved.json))
+assert.equal(saved.json.entries.length, 3)
+const onDisk = JSON.parse(readFileSync(specFile, 'utf8'))
+assert.equal(onDisk.tools.length, 3)
+assert.ok(registered.has('demo_demo_new'), '新增接口应注册成工具')
+const newTool = registered.get('demo_demo_new')
+assert.equal(newTool.parameters.properties.id.type, 'string', '路径占位符应自动生成参数')
+console.log(`PUT /gateway → 文件 3 条，工具 ${[...registered.keys()].length} 个（含 demo_demo_new）`)
+
+// 4. 坏配置：拒绝并保持文件不变
+const broken = structuredClone(nextSpec)
+broken.tools.push({ name: 'broken_tool' })
+const rejected = await call('PUT', '/gateway', { file: specFile, spec: broken })
+assert.equal(rejected.status, 400)
+assert.match(rejected.json.error, /缺少 path/)
+assert.equal(JSON.parse(readFileSync(specFile, 'utf8')).tools.length, 3, '坏配置不能覆盖好文件')
+console.log(`PUT 坏配置 → 400「${rejected.json.error}」，文件未变`)
+
+// 5. 新建网关：参数校验
+const badName = await call('POST', '/gateways', { server: 'bad name!', baseUrl: 'https://x.example.com' })
+assert.equal(badName.status, 400)
+assert.match(badName.json.error, /服务名/)
+const badUrl = await call('POST', '/gateways', { server: 'erp', baseUrl: 'ftp://x' })
+assert.equal(badUrl.status, 400)
+assert.match(badUrl.json.error, /baseUrl/)
+console.log('POST /gateways（坏服务名/坏 baseUrl）→ 400')
+
+// 6. 新建网关：成功 → 目录多一个空网关文件，列表里出现
+const created = await call('POST', '/gateways', { server: 'erp', baseUrl: 'https://erp.example.com', auth: { type: 'header', header: 'X-API-Key', env: 'ERP_KEY' } })
+assert.equal(created.status, 200, JSON.stringify(created.json))
+const erpFile = path.join(dir, 'erp.json')
+assert.equal(created.json.file, erpFile)
+assert.ok(existsSync(erpFile), '应生成 erp.json')
+assert.equal(created.json.spec.server, 'erp')
+assert.equal(created.json.spec.auth.env, 'ERP_KEY')
+assert.equal(created.json.status, 'empty')
+const list2 = await call('GET', '/gateways')
+assert.equal(list2.json.gateways.length, 2)
+assert.ok(list2.json.gateways.some((item) => item.server === 'erp' && item.empty === true))
+console.log(`POST /gateways → ${path.basename(erpFile)}，列表 ${list2.json.gateways.length} 个网关`)
+
+// 7. 同名网关 → 409
+const duplicated = await call('POST', '/gateways', { server: 'erp', baseUrl: 'https://erp2.example.com' })
+assert.equal(duplicated.status, 409)
+assert.match(duplicated.json.error, /已存在同名网关/)
+console.log('POST /gateways（重名）→ 409')
+
+// 8. 给新网关加接口 → 工具按它的 server 前缀注册
+const erpSpec = { server: 'erp', baseUrl: 'https://erp.example.com', auth: { type: 'header', header: 'X-API-Key', env: 'ERP_KEY' }, tools: [{ name: 'order_detail', method: 'GET', path: '/orders/{orderId}' }] }
+const erpSaved = await call('PUT', '/gateway', { file: erpFile, spec: erpSpec })
+assert.equal(erpSaved.status, 200, JSON.stringify(erpSaved.json))
+assert.ok(registered.has('erp_order_detail'), '新网关的工具应按 erp_ 前缀注册')
+assert.equal(erpSaved.json.registered.length, 1)
+console.log(`PUT /gateway（erp）→ 注册 erp_order_detail，共 ${[...registered.keys()].length} 个工具`)
+
+// 9. 在线测试可以指定网关
+const badArgs = await call('POST', '/test', {
+  file: specFile,
+  tool: { name: 'probe', method: 'GET', path: '/v1/forecast', params: { latitude: { type: 'number', required: true }, longitude: { type: 'number', required: true } } },
+  args: { latitude: 30 },
+})
+assert.equal(badArgs.status, 200, JSON.stringify(badArgs.json))
+assert.equal(badArgs.json.result.ok, false)
+assert.equal(badArgs.json.result.error, 'invalid_arguments')
+assert.match(badArgs.json.result.message, /longitude/)
+console.log(`POST /test（缺参）→ ${badArgs.json.result.error}「${badArgs.json.result.message}」`)
+
+// 10. 坏定义 / 缺 tool
+const badTool = await call('POST', '/test', { tool: { name: 'nopath' }, args: {} })
+assert.equal(badTool.status, 400)
+assert.match(badTool.json.error, /缺少 path/)
+const noTool = await call('POST', '/test', {})
+assert.equal(noTool.status, 400)
+assert.match(noTool.json.error, /缺少 tool/)
+console.log('POST /test（坏定义/缺 tool）→ 400')
+
+// 11. 删除网关 → 文件消失，工具注销，列表回到 1 个
+const removed = await call('DELETE', `/gateway?file=${encodeURIComponent(erpFile)}`)
+assert.equal(removed.status, 200, JSON.stringify(removed.json))
+assert.equal(existsSync(erpFile), false)
+assert.equal(removed.json.gateways.length, 1)
+assert.equal(registered.has('erp_order_detail'), false, '删掉网关后工具应注销')
+console.log(`DELETE /gateway → 剩 ${removed.json.gateways.length} 个网关，工具 ${[...registered.keys()].length} 个`)
+
+// 12. 目录外文件不许操作
+const outside = await call('DELETE', `/gateway?file=${encodeURIComponent(path.join(tmpdir(), 'evil.json'))}`)
+assert.equal(outside.status, 400)
+assert.match(outside.json.error, /网关目录/)
+console.log('DELETE 目录外路径 → 400')
+
+// 13. reload + 未知路由
+const reloaded = await call('POST', '/reload')
+assert.equal(reloaded.status, 200)
+assert.equal(reloaded.json.ok, true)
+const missing = await call('GET', '/nope')
+assert.equal(missing.status, 404)
+console.log('POST /reload → ok；GET /nope → 404')
+
+console.log('\n全部通过')

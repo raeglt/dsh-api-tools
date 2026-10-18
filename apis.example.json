@@ -1,0 +1,69 @@
+{
+  "server": "demo",
+  "baseUrl": "https://api.open-meteo.com/v1",
+  "auth": { "type": "none" },
+  "defaults": {
+    "timeoutMs": 20000,
+    "maxResponseChars": 12000,
+    "headers": { "User-Agent": "dsh-api-gateway/0.1" }
+  },
+  "tools": [
+    {
+      "name": "weather_forecast",
+      "description": "查询指定经纬度未来若干天的天气预报（最高/最低温、降水、天气代码）。适合回答“武汉下周天气怎么样”这类问题。",
+      "method": "GET",
+      "path": "/forecast",
+      "params": {
+        "latitude": { "in": "query", "type": "number", "required": true, "description": "纬度，例如武汉 30.5928" },
+        "longitude": { "in": "query", "type": "number", "required": true, "description": "经度，例如武汉 114.3055" },
+        "forecast_days": { "in": "query", "type": "integer", "default": 7, "description": "预报天数，1-16，默认 7" },
+        "daily": {
+          "in": "query",
+          "type": "string",
+          "default": "temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code",
+          "description": "需要的日级字段，逗号分隔；默认最高温、最低温、降水量、天气代码"
+        },
+        "timezone": { "in": "query", "type": "string", "default": "Asia/Shanghai", "description": "时区，例如 Asia/Shanghai" }
+      }
+    },
+    {
+      "name": "city_lookup",
+      "description": "按城市名查询经纬度与国家。拿到坐标后再调用 weather_forecast 查天气。",
+      "method": "GET",
+      "baseUrl": "https://geocoding-api.open-meteo.com/v1",
+      "path": "/search",
+      "params": {
+        "name": { "in": "query", "type": "string", "required": true, "description": "城市名，英文或拼音，例如 Wuhan" },
+        "count": { "in": "query", "type": "integer", "default": 5, "description": "返回条数，默认 5" },
+        "language": { "in": "query", "type": "string", "default": "zh", "description": "结果语言，例如 zh" }
+      }
+    },
+    {
+      "name": "order_detail",
+      "enabled": false,
+      "description": "示例：路径占位符 + 鉴权头 + 布尔查询参数。把 baseUrl 换成你自己的服务，并把 enabled 改成 true。",
+      "method": "GET",
+      "baseUrl": "https://your-erp.example.com/api",
+      "path": "/orders/{orderId}",
+      "auth": { "type": "header", "header": "X-API-Key", "env": "ERP_API_KEY" },
+      "params": {
+        "orderId": { "in": "path", "type": "string", "required": true, "description": "订单号" },
+        "withLogistics": { "in": "query", "type": "boolean", "description": "是否同时返回物流轨迹" }
+      }
+    },
+    {
+      "name": "create_refund",
+      "enabled": false,
+      "description": "示例：写操作（POST + JSON body）。默认禁用；启用后请把 dangerous 保持为 true。",
+      "method": "POST",
+      "baseUrl": "https://your-erp.example.com/api",
+      "path": "/orders/{orderId}/refunds",
+      "dangerous": true,
+      "params": {
+        "orderId": { "in": "path", "type": "string", "required": true, "description": "订单号" },
+        "amount": { "in": "body", "type": "number", "required": true, "description": "退款金额（元）" },
+        "reason": { "in": "body", "type": "string", "required": true, "description": "退款原因" }
+      }
+    }
+  ]
+}
