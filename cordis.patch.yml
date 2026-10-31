@@ -5,6 +5,10 @@
       name: dsh-api-tools
       config:
         specFile: api-tools/apis.json
+        # 统一前缀：注册出的工具名形如 api_tool_<网关>_<工具>。这样一整族工具
+        # 在外部工具管理器（如渐进式发现插件）里能用一条 `api_tool_*` 规则覆盖。
+        # 想恢复旧名字（<网关>_<工具>）把这里删掉或设为空字符串即可。
+        toolPrefix: api_tool
         timeoutMs: 30000
         maxResponseChars: 8000
         watch: true
