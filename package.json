@@ -2,6 +2,11 @@
   "name": "dsh-api-tools",
   "version": "0.1.1",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raeglt/dsh-api-tools.git"
+  },
   "description": "把一组 RESTful API 接口集合转成 DSH 工具集：一份 spec 声明接口，每个接口注册为一个工具。",
   "type": "module",
   "main": "lib/index.js",
